@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -29,10 +30,99 @@ class MultiHeadAttention(nn.Module):
         self._n_head = n_head
         self._dropout_rate = droput_rate
 
-        self.query_fc = nn.Linear()
+        self.query_fc = nn.Linear(self._d_model, self._d_key * self._n_head)
+        self.key_fc = nn.Linear(self._d_model, self._d_key * self._n_head)
+        self.value_fc = nn.Linear(self._d_model, self._d_value * self._n_head)
+        self.output_fc = nn.Linear(self._d_value * self._n_head, self._d_model)
+
+    def __compute_qkv(self, queries, keys, values):
+        '''
+        Add linear projection to queries, keys and values.
+        :param queries:
+        :param keys:
+        :param values:
+        :param n_head:
+        :param d_key:
+        :param d_value:
+        :return:
+        '''
+        q = self.query_fc(queries)
+        k = self.key_fc(keys)
+        v = self.value_fc(values)
+        return q, k, v
+
+    def __split_heads(self, x):
+        '''
+        Reshape the last dimension of input tensor x so that it becomes two
+        dimensions and then transpose. Specifically, input a tensor with shape
+        [bs, max_sequence_length, n_head * hidden_dim].
+        :param x:
+        :return:
+        '''
+        hidden_size = x.shape[-1]
+        x_shape = x.shape
+        reshaped = x.reshape([x_shape[0], x_shape[1], self._n_head, hidden_size // self._n_head])
+
+        # permute the dimensions into:
+        # [batch_size, n_head, max_sequence_len, hidden_size_per_head]
+        return reshaped.transpose(1, 2)
+
+    def __combine_heads(self, x):
+        '''
+        Transpose and then reshape the last two dimensions of input tensor x
+        so that it becomes one dimension, which is reverse to __split_heads.
+        :param x:
+        :return:
+        '''
+        if len(x.shape) == 3: return x
+        if len(x.shape) != 4:
+            raise ValueError('Input(x) should be a 4-D Tensor.')
+
+        trans_x = x.transpose(1, 2)
+        x_shape = trans_x.shape
+        return trans_x.reshape([x_shape[0], x_shape[1], -1])
+
+    def scaled_dot_product_attention(self, q, k, v, attn_bias):
+        '''
+        Scaled Dot-Product Attention
+        :param k:
+        :param v:
+        :param attn_bias:
+        :return:
+        '''
+        scaled_q = (self._d_key**-0.5) * q
+        product = torch.matmul(scaled_q, k.transpose(2, 3))
+        if attn_bias:
+            product += attn_bias
+        weights = F.softmax(product, dim=-1)
+        if self._dropout_rate:
+            weights = F.dropout(weights, self._dropout_rate)
+        out = torch.matmul(weights, v)
+        return out
 
     def forward(self, queries, keys, values, attn_bias):
-        pass
+        keys = queries if keys is None else keys
+        values = keys if values is None else values
+
+        if not (len(queries.shape) == len(keys.shape) == len(values.shape) == 3):
+            raise ValueError(
+                'Inputs: queries, keys and values should all be 3-D tensors'
+            )
+
+        q, k, v = self.__compute_qkv(queries, keys, values)
+
+        q = self.__split_heads(q)
+        k = self.__split_heads(k)
+        v = self.__split_heads(v)
+
+        ctx_multiheads = self.scaled_dot_product_attention(q, k, v, attn_bias)
+
+        out = self.__combine_heads(ctx_multiheads)
+
+        # Project back to the model size.
+        proj_out = self.output_fc(out)
+        return proj_out
+
 
 
 class EncoderLayer(nn.Module):

@@ -3,9 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-
-
-
 class MultiHeadAttention(nn.Module):
     def __init__(self,
                  d_key,
@@ -17,34 +14,20 @@ class MultiHeadAttention(nn.Module):
         Multi-Head Attention. Note that attn_bias is added to the logit before
         computing softmax activiation to mask certain selected positions so that
         they will not considered in attention weights.
-        :param d_key:
-        :param d_value:
-        :param d_model:
-        :param n_head:
-        :param droput_rate:
         """
         super(MultiHeadAttention, self).__init__()
         self._d_key = d_key
-        self._d_value = d_value
-        self._d_model = d_model
         self._n_head = n_head
         self._dropout_rate = droput_rate
 
-        self.query_fc = nn.Linear(self._d_model, self._d_key * self._n_head)
-        self.key_fc = nn.Linear(self._d_model, self._d_key * self._n_head)
-        self.value_fc = nn.Linear(self._d_model, self._d_value * self._n_head)
-        self.output_fc = nn.Linear(self._d_value * self._n_head, self._d_model)
+        self.query_fc = nn.Linear(d_model, d_key * n_head)
+        self.key_fc = nn.Linear(d_model, d_key * n_head)
+        self.value_fc = nn.Linear(d_model, d_value * n_head)
+        self.output_fc = nn.Linear(d_value * n_head, d_model)
 
     def __compute_qkv(self, queries, keys, values):
         '''
         Add linear projection to queries, keys and values.
-        :param queries:
-        :param keys:
-        :param values:
-        :param n_head:
-        :param d_key:
-        :param d_value:
-        :return:
         '''
         q = self.query_fc(queries)
         k = self.key_fc(keys)
@@ -54,15 +37,12 @@ class MultiHeadAttention(nn.Module):
     def __split_heads(self, x):
         '''
         Reshape the last dimension of input tensor x so that it becomes two
-        dimensions and then transpose. Specifically, input a tensor with shape
+        dimensional and then transpose. Specifically, input a tensor with shape
         [bs, max_sequence_length, n_head * hidden_dim].
-        :param x:
-        :return:
         '''
         hidden_size = x.shape[-1]
         x_shape = x.shape
         reshaped = x.reshape([x_shape[0], x_shape[1], self._n_head, hidden_size // self._n_head])
-
         # permute the dimensions into:
         # [batch_size, n_head, max_sequence_len, hidden_size_per_head]
         return reshaped.transpose(1, 2)
@@ -71,8 +51,6 @@ class MultiHeadAttention(nn.Module):
         '''
         Transpose and then reshape the last two dimensions of input tensor x
         so that it becomes one dimension, which is reverse to __split_heads.
-        :param x:
-        :return:
         '''
         if len(x.shape) == 3: return x
         if len(x.shape) != 4:
@@ -85,14 +63,10 @@ class MultiHeadAttention(nn.Module):
     def scaled_dot_product_attention(self, q, k, v, attn_bias):
         '''
         Scaled Dot-Product Attention
-        :param k:
-        :param v:
-        :param attn_bias:
-        :return:
         '''
         scaled_q = (self._d_key**-0.5) * q
         product = torch.matmul(scaled_q, k.transpose(2, 3))
-        if attn_bias:
+        if attn_bias is not None:
             product += attn_bias
         weights = F.softmax(product, dim=-1)
         if self._dropout_rate:
@@ -124,7 +98,6 @@ class MultiHeadAttention(nn.Module):
         return proj_out
 
 
-
 class EncoderLayer(nn.Module):
     def __init__(self,
                  n_head,
@@ -136,39 +109,21 @@ class EncoderLayer(nn.Module):
                  attention_dropout,
                  relu_dropout,
                  hidden_act):
-        ''' # TODO give more comprehensive explanation.
+        '''
         The encoder layer that can be stacked to form a deep encoder.
         This module consists of a multi-head (self) attention followed by
-        position-wise feed-forward networks and both the two components to gather
-        with the post_process_layer to add residual connection, layer normalization
-        and dropout.
-
-        :param n_head:
-        :param d_key:
-        :param d_value:
-        :param d_model:
-        :param d_inner_hid:
-        :param prepostprocess_dropout:
-        :param attention_dropout:
-        :param relu_dropout:
-        :param hidden_act:
+        position-wise feed-forward networks.
         '''
         super(EncoderLayer, self).__init__()
-        self._n_head = n_head
-        self._d_key = d_key
-        self._d_value = d_value
-        self._d_model = d_model
-        self._d_inner_hid = d_inner_hid
         self._prepostprocess_dropout = prepostprocess_dropout
-        self._attention_dropout = attention_dropout
         self._relu_dropout = relu_dropout
         self._hidden_act = hidden_act
 
         self.multi_head_attention = MultiHeadAttention(d_key, d_value, d_model, n_head, attention_dropout)
-        self.encoder_layer_norm = nn.LayerNorm(self._d_model)
-        self.ffn_fc_0 = nn.Linear(self._d_model, self._d_inner_hid)
-        self.ffn_fc_1 = nn.Linear(self._d_inner_hid, self._d_model)
-        self.encoder_post_ffn_layer_norm = nn.LayerNorm(self._d_model)
+        self.post_att_layer_norm = nn.LayerNorm(d_model)
+        self.ffn_fc_0 = nn.Linear(d_model, d_inner_hid)
+        self.ffn_fc_1 = nn.Linear(d_inner_hid, d_model)
+        self.post_ffn_layer_norm = nn.LayerNorm(d_model)
 
     def forward(self, enc_input, attn_bias):
         attn_output = self.multi_head_attention(enc_input, None, None, attn_bias)
@@ -177,7 +132,7 @@ class EncoderLayer(nn.Module):
         else:
             out = attn_output
         out = out + enc_input
-        attn_output = self.encoder_layer_norm(out)
+        attn_output = self.post_att_layer_norm(out)
 
         hidden = self.ffn_fc_0(attn_output)
         hidden = getattr(F, self._hidden_act)(hidden)
@@ -190,7 +145,7 @@ class EncoderLayer(nn.Module):
         else:
             out = ffd_output
         out = out + attn_output
-        return self.encoder_post_ffn_layer_norm(out)
+        return self.post_ffn_layer_norm(out)
 
 
 class Encoder(nn.Module):
@@ -206,18 +161,7 @@ class Encoder(nn.Module):
                  relu_dropout,
                  hidden_act):
         '''
-        The encoder is composed of a stack of identical layers returned by calling
-        EncoderLayer.
-        :param n_layer:
-        :param n_head:
-        :param d_key:
-        :param d_value:
-        :param d_model:
-        :param d_inner_hid:
-        :param prepostprocess_dropout:
-        :param attention_dropout:
-        :param relu_dropout:
-        :param hidden_act:
+        The encoder is composed of a stack of identical layers (instances of EncoderLayer).
         '''
         super(Encoder, self).__init__()
         self._n_layer = n_layer

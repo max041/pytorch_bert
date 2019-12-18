@@ -31,9 +31,7 @@ class BertConfig(object):
 class BertModel(nn.Module):
     def __init__(self,
                  config,
-                 weight_sharing=True,
-                 use_fp16=False,
-                 enable_deterministic_mode=False):
+                 weight_sharing=True):
         super(BertModel, self).__init__()
         self._emb_size = config['hidden_size']
         self._n_layer = config['num_hidden_layers']
@@ -86,7 +84,7 @@ class BertModel(nn.Module):
 
         with torch.no_grad():
             self_attn_mask = torch.matmul(input_mask, input_mask.transpose(1, 2))
-            n_head_self_attn_mask = 1000 * (self_attn_mask - 1)
+            n_head_self_attn_mask = (1000 * (self_attn_mask - 1)).unsqueeze(1)
 
         return self.encoder(emb_out, n_head_self_attn_mask)
 

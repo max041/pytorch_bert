@@ -67,7 +67,7 @@ class MultiHeadAttention(nn.Module):
         scaled_q = (self._d_key**-0.5) * q
         product = torch.matmul(scaled_q, k.transpose(2, 3))
         if attn_bias is not None:
-            product += attn_bias
+            product = product + attn_bias
         weights = F.softmax(product, dim=-1)
         if self._dropout_rate:
             weights = F.dropout(weights, self._dropout_rate)

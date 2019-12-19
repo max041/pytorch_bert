@@ -66,12 +66,14 @@ class BertModel(nn.Module):
                                attention_dropout=self._attention_dropout,
                                relu_dropout=0,
                                hidden_act=self._hidden_act)
+        self.pooled_fc = nn.Linear(self._emb_size ,self._emb_size)
 
     def forward(self,
                 src_ids,
                 position_ids,
                 sentence_ids,
-                input_mask):
+                input_mask,
+                pooled=False):
         emb_out = self.word_embedding(src_ids)
         position_emb_out = self.pos_embedding(position_ids)
         sent_emb_out = self.sent_embedding(sentence_ids)
@@ -86,7 +88,16 @@ class BertModel(nn.Module):
             self_attn_mask = torch.matmul(input_mask, input_mask.transpose(1, 2))
             n_head_self_attn_mask = (1000 * (self_attn_mask - 1)).unsqueeze(1)
 
-        return self.encoder(emb_out, n_head_self_attn_mask)
+        enc_out = self.encoder(emb_out, n_head_self_attn_mask)
+
+        if pooled:
+            '''Get the first feature of each sequence for classification'''
+            next_sent_feat = enc_out[:, 0, :]
+            next_sent_feat = self.pooled_fc(next_sent_feat)
+            next_sent_feat = F.tanh(next_sent_feat)
+            return next_sent_feat
+        else:
+            return enc_out
 
 
 

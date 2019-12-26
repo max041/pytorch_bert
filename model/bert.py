@@ -94,7 +94,7 @@ class BertModel(nn.Module):
             '''Get the first feature of each sequence for classification'''
             next_sent_feat = enc_out[:, 0, :]
             next_sent_feat = self.pooled_fc(next_sent_feat)
-            next_sent_feat = F.tanh(next_sent_feat)
+            next_sent_feat = torch.tanh(next_sent_feat)
             return next_sent_feat
         else:
             return enc_out

@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from model.bert import BertModel
@@ -16,18 +17,17 @@ class Classifier(nn.Module):
                 position_ids,
                 sentence_ids,
                 input_mask,
-                labels,
-                is_prediction=False):
+                labels):
         cls_feats = self.bert(src_ids, position_ids, sentence_ids, input_mask, pooled=True)
         cls_feats = F.dropout(cls_feats, 0.1)
         logits = self.cls_out(cls_feats)
 
-        if is_prediction:
+        with torch.no_grad():
             probs = F.softmax(logits, 1)
-            return probs
+            accuracy = (labels != probs.topk(1, 1)[1]).type(torch.float32).sum() / len(labels)
 
         ce_loss = F.cross_entropy(logits, labels.reshape(-1), reduction='none')
         loss = ce_loss.mean()
-        return loss
+        return loss, probs, accuracy
 
 

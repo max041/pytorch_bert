@@ -1,3 +1,5 @@
 .idea
 model/__pycache__
 __pycache__/
+logs/
+notebooks/.ipynb_checkpoints/

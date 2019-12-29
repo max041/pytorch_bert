@@ -2,7 +2,6 @@ import tokenization
 import numpy as np
 import csv
 import os
-from tqdm import tqdm
 
 
 class MnliDataProcessor:
@@ -19,7 +18,8 @@ class MnliDataProcessor:
         )
         self.vocab = self.tokenizer.vocab
 
-        np.random.seed(random_seed)
+        if random_seed is not None:
+            np.random.seed(random_seed)
 
         self.current_train_example = -1
         self.current_train_epoch = -1
@@ -131,17 +131,17 @@ class MnliDataProcessor:
         # max_len = max(len(inst) for inst in insts)
 
         src_id = np.array([inst + [pad_id] * (max_len - len(inst)) for inst in batch_src_ids])
-        src_id = src_id.astype(np.int64).reshape([-1, max_len, 1])
+        # src_id = src_id.astype(np.int64).reshape([-1, max_len, 1])
 
         # This is used to avoid attention on paddings.
         self_input_mask = np.array([[1] * len(inst) + [0] * (max_len - len(inst)) for inst in batch_src_ids])
         self_input_mask = np.expand_dims(self_input_mask, axis=-1)
 
         pos_id = np.array([inst + [pad_id] * (max_len - len(inst)) for inst in batch_pos_ids])
-        pos_id = pos_id.astype(np.int64).reshape([-1, max_len, 1])
+        # pos_id = pos_id.astype(np.int64).reshape([-1, max_len, 1])
 
         sent_id = np.array([inst + [pad_id] * (max_len - len(inst)) for inst in batch_sent_ids])
-        sent_id = sent_id.astype(np.int64).reshape([-1, max_len, 1])
+        # sent_id = sent_id.astype(np.int64).reshape([-1, max_len, 1])
 
         return [src_id, pos_id, sent_id, self_input_mask, labels]
 
@@ -236,5 +236,14 @@ if __name__ == '__main__':
 
     print(num_labels)
     print(num_train_examples)
-    print(next(train_data_generator()))
+    data = next(train_data_generator())
+
+    # import pickle
+    #
+    #
+    # def save_pickle(data, fname):
+    #     with open(fname, 'wb') as f:
+    #         pickle.dump(data, f)
+    #
+    # save_pickle(data, '/home/cvds_lab/maxim/transformer_investigation/notebooks/ckp/my_input.pkl')
 

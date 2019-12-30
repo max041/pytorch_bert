@@ -8,9 +8,8 @@ import numpy as np
 class Logger(metaclass=Singleton):
     def __init__(self, dump_dir=None):
         self.dump_dir = dump_dir
-        if os.path.exists(dump_dir):
-            shutil.rmtree(dump_dir)
-        os.makedirs(dump_dir)
+        if not os.path.exists(dump_dir):
+            os.makedirs(dump_dir)
 
         self.logs_dict = {}
 

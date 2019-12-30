@@ -23,11 +23,17 @@ parser.add_argument('--epoch', type=int, default=3,
                     help='Number of epochs for fine-tuning.')
 parser.add_argument('--learning_rate', type=float, default=5e-5,
                     help='Learning rate used to train.')
+parser.add_argument('--weight_decay', type=float, default=0.01,
+                    help='Weight decay rate for L2 regularization.')
+parser.add_argument('--warmup_proportion', type=float, default=0.1,
+                    help='Proportion of training steps to perform linear learning rate warmup for.')
 # Logging:
 parser.add_argument('--skip_steps', type=int, default=10,
                     help='The steps interval to print loss.')
 # parser.add_argument('--verbose', type=bool, default=False,
 #                     help='Whether to output verbose log.')
+parser.add_argument('--log_to', type=str, default='train.csv',
+                    help='Name of log file.')
 
 # Data:
 parser.add_argument('--data_dir', type=str, default=None,
@@ -48,6 +54,70 @@ parser.add_argument('--random_seed', type=int, default=None,
 parser.add_argument('--use_cuda', type=bool, default=True,
                     help='If set, use GPU for training.')
 args = parser.parse_args()
+
+class Optimizer:
+    def __init__(self,
+                 model,
+                 warmup_steps,
+                 max_train_steps,
+                 learning_rate,
+                 weight_decay):
+        self.model = model
+        self.warmup_steps = warmup_steps
+        self.max_train_steps = max_train_steps
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+
+        self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        self.scheduled_lr = learning_rate
+
+    def _linear_warmup_decay(self, learning_rate, max_train_steps, warmup_steps, global_step):
+        lr_0 = learning_rate * global_step / warmup_steps
+        lr_1 = learning_rate * (1 - global_step / max_train_steps)
+        is_warmup = int(global_step < warmup_steps)
+        return (1 - is_warmup) * lr_1 + is_warmup * lr_0
+
+    def update_lr(self, global_step):
+        if self.warmup_steps > 0:
+            scheduled_lr = self._linear_warmup_decay(self.learning_rate,
+                                                     self.max_train_steps,
+                                                     self.warmup_steps,
+                                                     global_step)
+            for group in self.optimizer.param_groups:
+                group['lr'] = scheduled_lr
+            self.scheduled_lr = scheduled_lr
+
+    def clip(self):
+        clip_norm_thres = 1.0
+        global_norm = 0
+        with torch.no_grad():
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    norm = (param.grad * param.grad).sum().item()
+                    global_norm += norm
+        global_norm = np.sqrt(global_norm)
+        factor = clip_norm_thres / max(global_norm, clip_norm_thres)
+        with torch.no_grad():
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    param.grad = factor * param.grad
+
+    def decay(self):
+        with torch.no_grad():
+            weights = filter(lambda param: (param[0].find('bias') == -1) and (param[0].find('layer_norm') == -1),
+                             self.model.named_parameters())
+            for weight in weights:
+                weight[1].data = weight[1].data - weight[1].data * self.weight_decay * self.scheduled_lr
+
+    def step(self, global_step):
+        self.update_lr(global_step)
+        self.clip()
+        self.optimizer.step()
+        self.decay()
+
+    def zero_grad(self):
+        self.optimizer.zero_grad()
+
 
 
 def main(args):
@@ -87,23 +157,27 @@ def main(args):
 
     max_train_steps = args.epoch * num_train_examples // args.batch_size
 
+    warmup_steps = int(max_train_steps * args.warmup_proportion)
+
     classifier = Classifier(bert_config, num_labes).to(device)
 
-    optimizer = torch.optim.Adam(classifier.parameters(), lr=args.learning_rate)
+    # optimizer = torch.optim.Adam(classifier.parameters(), lr=args.learning_rate)
+    optimizer = Optimizer(classifier, warmup_steps, max_train_steps, args.learning_rate, args.weight_decay)
 
     if args.init_pre_training_params:
         pre_training_params = load_pickle(args.init_pre_training_params)
         classifier.bert.load_state_dict(pre_training_params)
 
-        # # Temporal
-        # cls_ckp = load_pickle('/home/cvds_lab/maxim/transformer_investigation/notebooks/ckp/classifier_ckp.pkl')
-        # classifier.cls_out.weight.data = torch.tensor(cls_ckp['cls_out_w'], dtype=torch.float32).t().to(device)
-        # classifier.cls_out.bias.data = torch.tensor(cls_ckp['cls_out_b'], dtype=torch.float32).to(device)
-        # # Temporal
+        # Temporal
+        cls_ckp = load_pickle('/home/cvds_lab/maxim/transformer_investigation/notebooks/ckp/classifier_ckp.pkl')
+        classifier.cls_out.weight.data = torch.tensor(cls_ckp['cls_out_w'], dtype=torch.float32).t().to(device)
+        classifier.cls_out.bias.data = torch.tensor(cls_ckp['cls_out_b'], dtype=torch.float32).to(device)
+        # Temporal
 
-    Logger().add_log('train.csv', ['epoch', 'step', 'loss', 'accuracy',
-                                   'cls_w_mean', 'cls_w_std', 'cls_w_min', 'cls_w_max',
-                                   'cls_b_mean', 'cls_b_std', 'cls_b_min', 'cls_b_max'])
+    logfile = args.log_to
+    Logger().add_log(logfile, ['epoch', 'step', 'loss', 'accuracy',
+                               'cls_w_mean', 'cls_w_std', 'cls_w_min', 'cls_w_max',
+                               'cls_b_mean', 'cls_b_std', 'cls_b_min', 'cls_b_max'])
     steps = 0
     total_loss, total_acc = [], []
     time_begin = time.time()
@@ -119,23 +193,23 @@ def main(args):
         optimizer.zero_grad()
         loss, _, accuracy = classifier(src_ids, position_ids, sentence_ids, input_mask, labels)
         loss.backward()
-        optimizer.step()
+        optimizer.step(steps)
 
         current_example, current_epoch = processor.get_train_progress()
-        Logger()['train.csv']['epoch'].append(current_epoch)
-        Logger()['train.csv']['step'].append(steps)
-        Logger()['train.csv']['loss'].append(loss.item())
-        Logger()['train.csv']['accuracy'].append(accuracy.item())
+        Logger()[logfile]['epoch'].append(current_epoch)
+        Logger()[logfile]['step'].append(steps)
+        Logger()[logfile]['loss'].append(loss.item())
+        Logger()[logfile]['accuracy'].append(accuracy.item())
         with torch.no_grad():
-            Logger()['train.csv']['cls_w_mean'].append(classifier.cls_out.weight.mean().item())
-            Logger()['train.csv']['cls_w_std'].append(classifier.cls_out.weight.std().item())
-            Logger()['train.csv']['cls_w_min'].append(classifier.cls_out.weight.min().item())
-            Logger()['train.csv']['cls_w_max'].append(classifier.cls_out.weight.max().item())
+            Logger()[logfile]['cls_w_mean'].append(classifier.cls_out.weight.mean().item())
+            Logger()[logfile]['cls_w_std'].append(classifier.cls_out.weight.std().item())
+            Logger()[logfile]['cls_w_min'].append(classifier.cls_out.weight.min().item())
+            Logger()[logfile]['cls_w_max'].append(classifier.cls_out.weight.max().item())
 
-            Logger()['train.csv']['cls_b_mean'].append(classifier.cls_out.bias.mean().item())
-            Logger()['train.csv']['cls_b_std'].append(classifier.cls_out.bias.std().item())
-            Logger()['train.csv']['cls_b_min'].append(classifier.cls_out.bias.min().item())
-            Logger()['train.csv']['cls_b_max'].append(classifier.cls_out.bias.max().item())
+            Logger()[logfile]['cls_b_mean'].append(classifier.cls_out.bias.mean().item())
+            Logger()[logfile]['cls_b_std'].append(classifier.cls_out.bias.std().item())
+            Logger()[logfile]['cls_b_min'].append(classifier.cls_out.bias.min().item())
+            Logger()[logfile]['cls_b_max'].append(classifier.cls_out.bias.max().item())
 
         if steps % 1000 == 0:
             Logger().log_all()

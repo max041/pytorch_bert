@@ -24,7 +24,7 @@ class Classifier(nn.Module):
 
         with torch.no_grad():
             probs = F.softmax(logits, 1)
-            accuracy = (labels != probs.topk(1, 1)[1]).type(torch.float32).sum() / len(labels)
+            accuracy = (labels == probs.topk(1, 1)[1]).type(torch.float32).sum() / len(labels)
 
         ce_loss = F.cross_entropy(logits, labels.reshape(-1), reduction='none')
         loss = ce_loss.mean()
